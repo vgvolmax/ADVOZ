@@ -15,6 +15,7 @@ function baseline(cpc=14,mean=100,variance=100){return {cpc,primaryMode:'orders'
   assert.ok(p.targetCpc>14);
   assert.strictEqual(p.evidenceType,'OBSERVATIONAL');
   for(const key of ['baselineAchievedCpc','targetCpc','targetCorridor','minSeparation','minFullDays','requiredPrimaryKpi','maxTestDays','stabilizationDays','stopLoss','mixedConditions','reloadWhen','possibleDecisions']) assert.ok(key in p.card,key);
+  assert.strictEqual(p.card.stabilizationDays,2,'default stabilization must be two full days');
 }
 
 {
