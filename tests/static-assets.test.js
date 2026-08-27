@@ -10,4 +10,6 @@ for(const ref of refs){
   assert.ok(fs.existsSync(path.join(root,ref)),`missing local asset: ${ref}`);
 }
 assert.ok(html.indexOf('src/ui_format.js')<html.indexOf('app.js'),'ui formatter must load before app.js');
+const app=fs.readFileSync(path.join(root,'app.js'),'utf8');
+assert.ok(app.includes("'&quot;'"),'HTML escaping must use a complete &quot; entity');
 console.log(`PASS local browser bundle assets (${refs.length} refs)`);
