@@ -1,0 +1,39 @@
+name: Verify v2
+
+on:
+  push:
+    branches: ["feat/v2-core"]
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run all tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          count=0
+          for test_file in tests/*.test.js; do
+            echo "==> $test_file"
+            node "$test_file"
+            count=$((count+1))
+          done
+          echo "Executed $count test files"
+      - name: Guard against legacy decision path
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -R --line-number --exclude-dir=.git -E "logSpend|fitDifferencedElasticity|marginalCpo" src app.js index.html; then
+            echo "Legacy spend-adjusted/day-to-day decision logic found in v2 path" >&2
+            exit 1
+          fi
