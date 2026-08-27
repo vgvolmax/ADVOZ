@@ -26,7 +26,7 @@ function planNextTest(context,opt={}){
   const mdeRelative=Math.max(.01,Number(opt.mdeRelative)||.20),feasibility=W.estimateTestFeasibility(b,mdeRelative,opt);
   if(!feasibility.feasible) return no('POWER_INFEASIBLE','Нужную мощность нельзя получить за разумный максимальный срок теста.',{feasibility});
   const corridorRel=Math.min(step*.4,Math.max(.015,Math.exp(Math.max(noise,0)*1.5)-1));
-  const stabilizationDays=Math.max(0,Math.round(Number(opt.stabilizationDays)??2));
+  const stabilizationRaw=Number(opt.stabilizationDays),stabilizationDays=Math.max(0,Math.round(Number.isFinite(stabilizationRaw)?stabilizationRaw:2));
   const minFullDays=Math.max(Math.round(Number(opt.minFullDays)||4),feasibility.requiredDays);
   const stopLoss=b.primaryMode==='profit'
     ?{code:'ECONOMIC',metric:'contributionProfit/day',relativeDecline:Math.abs(Number(opt.stopLossRelative)||.20),text:`Остановить режим при устойчивом ухудшении contributionProfit/day более чем на ${Math.round(Math.abs(Number(opt.stopLossRelative)||.20)*100)}%.`}
