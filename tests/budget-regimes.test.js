@@ -20,10 +20,22 @@ function regime(days){ return {id:'R1',startDate:days[0].date,endDate:days.at(-1
 }
 
 {
+  // Two perfectly flat spend levels at unchanged CPC are ambiguous: demand can create the same pattern.
   const d=makeDays([...Array(14).fill(1000),...Array(14).fill(2000)]);
-  const out=B.inferEffectiveBudgetStates(d,[regime(d)],{minRollingPoints:5,plateauCv:.05,capChangeRelative:.2});
+  const out=B.inferEffectiveBudgetStates(d,[regime(d)],{minRollingPoints:5,plateauCv:.05,capChangeRelative:.2,minDailyCvForCapChange:.08});
+  assert.strictEqual(out.states[0].code,'BUDGET_STATE_UNCERTAIN');
+  assert.strictEqual(out.changePoints.length,0);
+  assert.strictEqual(out.states[0].structuralShiftObserved,true);
+}
+
+{
+  // Repeating day-level variation with a stable 7-day total gives stronger evidence of an effective weekly ceiling.
+  const week=[700,1300,900,1100,800,1200,1000];
+  const d=makeDays([...week,...week,...week.map(x=>x*2),...week.map(x=>x*2)]);
+  const out=B.inferEffectiveBudgetStates(d,[regime(d)],{minRollingPoints:5,plateauCv:.05,capChangeRelative:.2,minDailyCvForCapChange:.08});
   assert.strictEqual(out.states[0].code,'BUDGET_CAP_CHANGED');
   assert.ok(out.changePoints.length>=1);
+  assert.strictEqual(out.states[0].cause,'INFERRED_EFFECTIVE_CEILING_SHIFT');
 }
 
 {
