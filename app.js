@@ -3,7 +3,7 @@
 const X=window.OzonXlsx,N=window.OzonV2Normalize,A=window.OzonV2,F=window.OzonV2UiFormat;
 const $=id=>document.getElementById(id);
 const state={campaigns:new Map(),files:[],sourceOrder:0,analysis:[],selected:null};
-const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;'}[c]));
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=n=>Number.isFinite(Number(n))?Number(n).toLocaleString('ru-RU',{maximumFractionDigits:2}):'—';
 const cpcMoney=n=>F.cpc(n);
 const pct=n=>Number.isFinite(Number(n))?(Number(n)*100).toLocaleString('ru-RU',{maximumFractionDigits:1})+'%':'—';
