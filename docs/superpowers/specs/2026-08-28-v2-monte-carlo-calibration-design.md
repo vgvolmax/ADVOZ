@@ -1,28 +1,26 @@
 # ADVOZ v2 Monte-Carlo Calibration — Design Specification
 
-**Status:** design candidate for approval  
+**Status:** design candidate for user approval  
 **Base:** `main` at `c43f154778f730d0582561bc51d36778795a9493`  
-**Purpose:** calibrate the already-implemented observational statistical pipeline against synthetic processes with known truth before treating `CI / p / q` and operational decisions as production-ready.
+**Purpose:** calibrate the implemented observational statistical pipeline against synthetic processes with known truth before treating `CI / p / q` and operational decisions as production-ready.
 
 ---
 
-## 1. Why this layer exists
+## 1. Purpose
 
-Ordinary unit/integration tests answer whether the implementation follows its formulas and contracts. They do **not** answer whether the statistical system is calibrated when repeatedly exposed to realistic time-series data with known truth.
+Unit/integration tests verify formulas and deterministic contracts. They do not answer whether the statistical system is calibrated when repeatedly exposed to realistic time-series data with known truth.
 
 Monte-Carlo calibration must answer:
 
-> If ADVOZ repeatedly receives data generated under a known truth, how often does it identify the transition, recover the correct direction, cover the true effect with its interval, issue a strong wrong decision, refuse to identify the effect, or recommend the wrong next CPC direction?
+> If ADVOZ repeatedly receives data generated under a known truth, how often does it identify the transition, recover the correct direction, cover the true effect, issue a strong wrong decision, refuse identification, or recommend the wrong next CPC direction?
 
-This is a **calibration and release-gate subsystem**, not a production inference module.
-
-All historical conclusions in production remain `OBSERVATIONAL`.
+This is a **calibration and release-gate subsystem**, not a production inference module. Historical production conclusions remain `OBSERVATIONAL`.
 
 ---
 
 ## 2. Non-negotiable architecture
 
-Calibration is a separate Node-only contour.
+Calibration is a separate Node-only contour:
 
 ```text
 Scenario manifest
@@ -53,72 +51,80 @@ The browser application remains local and unchanged by the simulator. No backend
 
 ## 3. Deterministic prerequisites before full Monte-Carlo
 
-Monte-Carlo must not be used as an expensive way to rediscover deterministic defects that can be reproduced with one test.
+Monte-Carlo must not be used as an expensive way to rediscover deterministic defects.
 
-### P0-1 — Low Order coverage must block unsupported recommendations
+### P0-1 — Low Order coverage blocks unsupported recommendations
 
-`orderReliableCoverage` is currently diagnostic only. Before B2 calibration, a recommendation based on `orders/day` must require sufficient reliable order coverage.
+Before B2 calibration, a recommendation based on `orders/day` must require sufficient reliable Order coverage.
 
 Contract:
 
-- one primary objective is resolved for the SKU/history;
-- when the objective is `orders/day`, candidate evidence with insufficient order coverage is not usable for response direction or `TargetCPC`;
-- default minimum coverage: `0.70`, configurable;
-- insufficient coverage produces `NO_FEASIBLE_TEST` or `INCONCLUSIVE` evidence, not a formal CPC direction.
+- resolve one primary objective for the SKU/history before regime comparison;
+- when the objective is `orders/day`, evidence from a regime below `minOrderCoverage` is unusable for response direction;
+- default `minOrderCoverage = 0.70`, configurable;
+- insufficient coverage yields unusable evidence and ultimately `NO_FEASIBLE_TEST` if no valid direction remains;
+- it must never silently fall through into a formal TargetCPC direction.
 
-### P0-2 — TargetCPC must depend on validated evidence
+### P0-2 — TargetCPC depends only on validated evidence
 
-Current response evidence must not use a transition merely because its structural code is `CLEAN_CPC_TRANSITION`.
-
-A transition is allowed to support response direction only after the full evidence gate:
+A transition may support response direction only after the complete evidence gate:
 
 1. `CLEAN_CPC_TRANSITION`;
 2. compatible primary KPI units;
-3. `LAG_STABLE`;
-4. `UNCERTAINTY_IDENTIFIED`;
-5. interval supports the effect direction for a strong claim;
-6. campaign FDR status is acceptable for inferential use;
-7. no data-quality/reliability guard blocks the transition.
+3. reliability/data-quality guards pass;
+4. `LAG_STABLE`;
+5. `UNCERTAINTY_IDENTIFIED`;
+6. uncertainty direction is usable;
+7. campaign-level `FDR_PASS`.
 
-`TargetCPC` must be calculated **after** campaign-level FDR, not before it.
+`FDR_NOT_PASS` and `FDR_NOT_APPLICABLE` do **not** support an inferential response direction.
 
-If no validated evidence supports a direction, return `NO_FEASIBLE_TEST` rather than constructing a direction from rejected transitions.
+Campaign-level BH/FDR must be applied **before** response evidence and `TargetCPC` are constructed.
 
-### P0-3 — Data gaps must not be clean transitions
+If no validated transition supports a direction, return `NO_FEASIBLE_TEST` rather than constructing a direction from rejected evidence.
 
-A calendar/data discontinuity between adjacent CPC regimes must be detected explicitly.
-
-Contract:
-
-- compute the number of missing calendar days between `from.endDate` and `to.startDate`;
-- a gap above the configured tolerance cannot remain `CLEAN_CPC_TRANSITION`;
-- use `OTHER_CONFOUNDED_TRANSITION` with a machine-readable `reasonCode: DATA_GAP` rather than adding a new top-level transition enum;
-- long-gap transitions cannot feed response direction.
-
-### P0-4 — Primary KPI units must never be mixed
-
-The objective cannot silently switch from `contributionProfit/day` in one regime to `orders/day` in another.
+### P0-3 — Data gaps cannot remain clean transitions
 
 Contract:
 
-- resolve the primary objective once per SKU analysis;
-- if profit is selected, a regime with inadequate profit coverage becomes unusable rather than falling back to orders;
-- if orders are selected, all compared regimes use orders;
-- `PrimaryMetric_A !== PrimaryMetric_B` forces `INCONCLUSIVE` and makes the transition unusable for response direction.
+- compute missing calendar days between `from.endDate` and `to.startDate`;
+- default tolerated missing days = `0`, configurable;
+- a gap above tolerance becomes `OTHER_CONFOUNDED_TRANSITION` with `reasonCode: DATA_GAP`;
+- gap-confounded evidence cannot feed response direction.
 
-### P0-5 — Historical precision/power must use both regimes
+### P0-4 — Primary KPI units are locked per SKU
 
-For an already-observed A→B transition, precision/power must account for the variance and sample size on **both** sides.
+The objective cannot switch per regime.
 
-A baseline-only approximation remains acceptable only in the future-test planner and must be explicitly labelled as a forecast assumption.
+Objective resolution contract:
+
+- if usable contribution-profit inputs exist and whole-history profit coverage meets configured requirements, lock the SKU objective to `contributionProfit/day`;
+- otherwise lock to `orders/day`;
+- once locked, individual regimes never fall back to another unit;
+- a regime lacking adequate coverage for the locked objective becomes unusable;
+- `PrimaryMetric_A !== PrimaryMetric_B` forces `INCONCLUSIVE` and cannot feed response direction.
+
+### P0-5 — Historical precision uses both regimes
+
+For an already-observed A→B transition, evidence sufficiency must use both sides.
+
+Introduce a separate historical two-regime precision/power contract based on both `(variance_A, n_A)` and `(variance_B, n_B)`, e.g. through the two-sample variance term:
+
+```math
+SE^2 = Var_A/n_A + Var_B/n_B
+```
+
+The exact implementation may use the bootstrap as the primary interval and a two-regime MDE/power summary as a diagnostic, but it must not call a baseline-only forecast a measured historical power result.
+
+The current baseline-only approximation remains allowed only in the **future-test planner**, explicitly labelled as a forecast assumption.
 
 ### Existing regression sentinel — missing Spend
 
-`missing Spend → CPC=0` is already fixed in current `main`. It is **not** an open P0.
+`missing Spend → CPC=0` is already fixed in current `main` and is not an open P0.
 
-It remains a mandatory sentinel scenario:
+It remains a mandatory sentinel:
 
-- when Spend is missing and reported Ozon CPC is valid, `AchievedCPC` must use the reported CPC fallback;
+- missing Spend + valid reported Ozon CPC → use reported CPC fallback;
 - missing/partial Spend must not create a synthetic zero-CPC regime.
 
 ---
@@ -127,9 +133,9 @@ It remains a mandatory sentinel scenario:
 
 ## A — Estimator calibration
 
-Purpose: test the statistical estimator with correct regime boundaries already known.
+Purpose: test the estimator with correct regime boundaries already known.
 
-Production components under test:
+Production path:
 
 ```text
 temporal_adjustment
@@ -138,29 +144,31 @@ temporal_adjustment
 → p-value / CI
 ```
 
-A deliberately bypasses CPC change-point detection and transition classification.
+A bypasses CPC detector and structural transition classification.
 
-### A truth parameters
+Minimum DGP variation:
 
-At minimum vary:
-
-- true relative effect: `0, ±0.10, ±0.20, ±0.30`;
+- true effect: `0, ±0.10, ±0.20, ±0.30`;
 - true lag: `0, 1, 2`;
 - regime lengths;
-- low / medium / high primary-KPI volume;
+- low / medium / high Orders volume;
 - weekday pattern strength;
 - linear trend;
 - overdispersion;
-- serial correlation / AR(1);
+- AR(1) serial correlation;
 - shock-free and demand-shock conditions.
 
-Primary KPI for this calibration phase is `orders/day`.
+Primary KPI for this phase is `orders/day`. Profit is calibrated separately after the full economics model is approved.
 
-Profit calibration is deferred until the full contribution-profit model is approved.
+### A identification definition
 
-### A output
+An A-run is `identified` only when:
 
-Measure whether the estimator itself is calibrated when segmentation is known to be correct.
+- temporal result is `LAG_STABLE`;
+- uncertainty result is `UNCERTAINTY_IDENTIFIED`;
+- a finite effect and CI are available.
+
+CI coverage and conditional sign recovery use exactly this denominator.
 
 ---
 
@@ -168,7 +176,7 @@ Measure whether the estimator itself is calibrated when segmentation is known to
 
 Purpose: test reconstruction of structure from an approximately 90-day Ozon-like history.
 
-Production path under test:
+Production path:
 
 ```text
 raw synthetic Ozon-like rows
@@ -180,17 +188,34 @@ raw synthetic Ozon-like rows
 → transition classification
 ```
 
-B1 does not require a separate simulator from B2; the same generated runs are scored with different truth labels.
+The same generated histories are later scored again in B2.
+
+### Change-point matching contract
+
+Detected and true change-points are matched one-to-one by minimum absolute date distance within a configurable tolerance.
+
+Default tolerance: `±2 calendar days`.
+
+Report both:
+
+- exact date error in days for matched points;
+- recall/precision under the configured tolerance.
+
+Unmatched detected points are false change-points; unmatched true points are misses.
+
+### B1 identification definition
+
+A true transition is pipeline-identified when a detected transition is matched to its true change-point within tolerance and has a structural classification output.
 
 ### B1 metrics
 
-- CPC change-point recall;
+- change-point recall and precision;
 - false change-point rate;
-- absolute change-point date error;
+- date error;
 - regime-count error;
 - CPC-regime value error;
 - transition confusion matrix: `CLEAN / MIXED / UNCERTAIN/OTHER`;
-- budget-state/classification diagnostics;
+- budget-state diagnostics;
 - price-confounding detection;
 - data-gap detection;
 - order-reliability/coverage guard correctness.
@@ -201,7 +226,7 @@ B1 does not require a separate simulator from B2; the same generated runs are sc
 
 Purpose: validate the **final operational output**, not only the estimator.
 
-Production path under test:
+Production path:
 
 ```text
 B1 pipeline
@@ -209,11 +234,15 @@ B1 pipeline
 → bootstrap uncertainty
 → campaign BH/FDR
 → observational decision
-→ response evidence
+→ validated response evidence
 → TargetCPC / NO_FEASIBLE_TEST
 ```
 
-This is mandatory because a well-calibrated estimator does not guarantee a correct response curve or next CPC recommendation.
+### B2 identification definition
+
+A transition is decision-identified when it passes structural/reliability gates and reaches an identified temporal + uncertainty result with a campaign q-value/FDR status.
+
+`DEPLOY/ROLLBACK` are **strong decisions**. `EXTEND/INCONCLUSIVE` are not discoveries.
 
 ### B2 metrics
 
@@ -221,236 +250,211 @@ This is mandatory because a well-calibrated estimator does not guarantee a corre
 - strong false-positive rate under true null;
 - wrong-sign strong-decision rate;
 - unconditional correct-direction rate;
-- correct-direction rate conditional on identification;
+- conditional correct-direction rate among decision-identified runs;
 - `RECOMMENDED` rate under null;
 - `RECOMMENDED` rate when the effect is not identified;
 - `NO_FEASIBLE_TEST` rate;
-- TargetCPC direction correctness;
+- TargetCPC direction accuracy;
 - recommendation rate after gap / low coverage / mixed transition / FDR fail;
-- rate at which rejected evidence still leaks into response direction — target is exactly zero.
+- rejected-evidence leakage into response direction — hard target `0`.
 
 ---
 
 ## C — Multiplicity calibration
 
-Purpose: evaluate campaign-level BH/FDR with multiple SKU.
-
-Generate campaigns containing both null and non-null SKU.
+Purpose: evaluate BH/FDR on multi-SKU campaigns.
 
 Required dependence structures:
 
 1. independent SKU innovations;
-2. correlated SKU through a shared latent demand shock;
+2. shared latent demand shock across SKU;
 3. shared calendar/trend components plus idiosyncratic noise.
 
-For every generated campaign:
+### Discovery definitions
+
+A `discovery` is a **final post-FDR strong decision**: `DEPLOY` or `ROLLBACK`.
+
+A `false discovery` is a discovery on a true-null transition.
+
+A `true discovery` is a discovery on a non-null transition with the correct sign.
+
+A wrong-sign discovery on a non-null transition is reported separately and is not counted as a true discovery.
+
+For each campaign:
 
 ```math
 FDP = FalseDiscoveries / max(AllDiscoveries, 1)
 ```
 
-Empirical FDR is:
+Empirical FDR:
 
 ```math
 EmpiricalFDR = mean(FDP_campaign)
 ```
 
-Do **not** pool all discoveries across campaigns and divide total false by total discoveries.
+Do not pool all discoveries across campaigns into one denominator.
 
-Also report true discovery rate / power and the fraction of campaigns with zero discoveries.
+Also report true discovery rate, wrong-sign discovery rate and the fraction of campaigns with zero discoveries.
 
 ---
 
 ## 5. DGP design
 
-The simulator models observed histories, not the internal Ozon auction.
+The simulator models observed histories, not undocumented Ozon auction internals.
 
-Do not model nominal Ozon bid or undocumented auction internals.
+Do not model nominal bid.
 
-### Core latent variables
+Core latent/observed components:
 
-Each synthetic history may contain:
-
-- latent demand level;
+- latent demand;
 - weekday multiplier;
-- deterministic linear trend;
-- serially correlated latent shock `AR(1)`;
+- linear trend;
+- AR(1) latent shock;
 - optional structural demand shock;
-- AchievedCPC regime and within-regime CPC noise;
-- potential traffic/click volume;
+- AchievedCPC regimes + within-regime noise;
+- potential traffic/clicks;
 - effective budget constraint state;
-- realized price regime;
-- orders generated by Poisson or overdispersed count process.
+- price regime;
+- Orders count process.
 
-### Observable accounting relationship
-
-When Spend is observed:
+When Spend is present:
 
 ```math
 Spend = AchievedCPC × Clicks
 ```
 
-This is generated as an accounting identity only. It does not encode a causal inference rule.
+This is an accounting identity only, never a causal diagnostic.
 
-### Count process
+Counts must support:
 
-The DGP must support:
+- Poisson;
+- overdispersed Gamma-Poisson/negative-binomial-compatible process;
+- AR(1)/shared latent multipliers.
 
-- Poisson counts;
-- overdispersed counts through a negative-binomial-compatible or equivalent Gamma-Poisson mechanism;
-- AR(1)/shared latent multipliers for temporal dependence.
+### Truth object
 
-### Truth definition
-
-Every generated run carries an explicit immutable `truth` object separate from observed rows.
+Every run carries an immutable `truth` object separate from observations.
 
 Truth contains at minimum:
 
-- true CPC regime boundaries and regime levels;
+- true CPC regime boundaries/levels;
 - true change-point dates;
-- true primary effect and direction;
+- true primary effect and sign;
 - true lag;
 - true confounder state: price / budget / demand shock / gap;
 - whether the transition is structurally clean;
 - whether a recommendation is logically permitted;
-- expected next direction where the scenario defines one;
-- null/non-null label for multiplicity.
+- expected next direction where defined;
+- null/non-null label.
 
-The production pipeline never reads `truth`.
+Production modules never receive `truth`.
 
-For simple A scenarios the true effect is directly parameterized.
+For A, the effect is directly parameterized.
 
-For B scenarios with budget/traffic interactions, truth may be obtained from the structural generator/counterfactual definition using the same latent innovations, rather than assuming a misleading closed-form effect.
+For B scenarios with traffic/budget interactions, truth may be derived from the structural generator/counterfactual using the same latent innovations rather than forcing a misleading closed-form effect.
 
 ---
 
-## 6. Mandatory adversarial scenarios for B
+## 6. Mandatory adversarial B scenarios
 
-The scenario manifest must include named, fixed sentinel/adversarial cases in addition to the broader parameter grid.
+The fixed manifest includes:
 
-Required scenarios:
-
-1. demand shock exactly on the CPC change-point;
+1. demand shock exactly on CPC change-point;
 2. pure temporal trend with zero CPC effect;
-3. long data gap between regimes;
-4. one- or two-day CPC outlier adjacent to a data gap;
-5. missing Spend with valid reported CPC;
+3. long data gap;
+4. 1–2 day CPC outlier adjacent to a gap;
+5. missing Spend + valid reported CPC;
 6. partial Spend coverage;
 7. low Order coverage;
-8. simultaneous CPC + price regime change;
-9. simultaneous CPC + effective budget-state change;
+8. simultaneous CPC + price change;
+9. simultaneous CPC + effective budget change;
 10. short baseline + long target regime;
-11. repeated CPC `A → B → A`;
-12. structural demand shift with no CPC change;
-13. new CPC regime whose separation is smaller than background CPC noise;
-14. stable CPC with large demand growth;
-15. clean CPC transition with no true primary effect;
-16. lag-sensitive effect where lag assumptions disagree.
+11. repeated `A → B → A`;
+12. structural demand shift without CPC change;
+13. CPC separation below background CPC noise;
+14. stable CPC + large demand growth;
+15. clean CPC transition with true null effect;
+16. lag-sensitive effect with conflicting lag evidence.
 
-Sentinel expectations must be encoded as truth contracts, not prose-only assertions.
+Sentinel expectations are machine-readable truth contracts.
 
 Examples:
 
 - no CPC change → no CPC treatment transition;
-- gap/low coverage/mixed transition → must not produce a strong supported TargetCPC direction from that evidence;
-- missing Spend fallback → must not produce CPC=0;
-- FDR fail → rejected transition must not leak into response recommendation.
+- gap / low coverage / mixed evidence alone → no supported TargetCPC direction;
+- missing Spend fallback → never CPC=0;
+- FDR fail → no leakage into recommendation.
 
 ---
 
-## 7. Scenario sampling strategy
+## 7. Scenario sampling
 
-Do not use a full Cartesian product over every DGP parameter.
+Avoid a full Cartesian grid.
 
-Use three complementary sources:
+Use:
 
-### 7.1 Compact factorial / pairwise grid
+1. compact factorial/pairwise coverage;
+2. fixed adversarial scenarios;
+3. seeded random parameter draws within approved ranges.
 
-Covers main interactions with a tractable scenario count.
-
-### 7.2 Named adversarial suite
-
-Targets known dangerous edge cases even if they are rare in random sampling.
-
-### 7.3 Seeded random parameter draws
-
-Samples parameters continuously inside approved ranges to reduce overfitting to a small hand-written grid.
-
-The manifest records every chosen parameter and the RNG seed.
+Every sampled scenario stores its parameters and seed.
 
 ---
 
-## 8. Metrics — unconditional and conditional
+## 8. Metrics: unconditional and identified-only
 
-Metrics must be reported in two views where applicable:
+Where meaningful, report both:
 
-1. **all runs / unconditional**;
-2. **identified runs only / conditional on identification**.
-
-This prevents a model that returns `INCONCLUSIVE` almost always from appearing perfectly calibrated on a tiny selected subset.
+- all runs / unconditional;
+- identified runs only / conditional.
 
 Mandatory metrics:
 
 - identification rate;
-- change-point recall;
-- false change-point rate;
-- change-point date error;
+- change-point recall/precision/date error;
 - transition confusion matrix;
-- CI coverage among identified runs;
-- mean / median CI width;
-- strong false-positive rate under null;
+- CI coverage among identified;
+- mean/median CI width;
+- strong false-positive rate;
 - sign recovery;
 - wrong-sign strong-decision rate;
-- unconditional correct-detection rate;
-- conditional correct-detection rate;
-- distribution of all operational decisions;
-- `RECOMMENDED` rate under null;
-- `RECOMMENDED` rate under non-identification;
+- unconditional/conditional correct detection;
+- full decision distribution;
+- `RECOMMENDED` under null;
+- `RECOMMENDED` under non-identification;
 - TargetCPC direction accuracy;
-- forbidden-recommendation rate under gap / low coverage / mixed / FDR fail;
+- forbidden recommendation rate under gap / low coverage / mixed / FDR fail;
 - empirical FDR;
 - true discovery rate.
 
-For every proportion, report a Monte-Carlo confidence interval rather than a naked percentage.
+Every reported proportion includes a Monte-Carlo confidence interval.
 
 ---
 
-## 9. Calibration report format
+## 9. Report format
 
-A full run writes both machine-readable and human-readable outputs.
+A full run writes JSON + Markdown.
 
-### Required metadata
+Required metadata:
 
 - production commit SHA;
-- calibration code commit SHA;
+- calibration commit SHA;
 - scenario schema version;
 - report schema version;
 - Node version;
-- run profile;
+- profile;
 - master seed;
-- scenario ID and parameters;
+- scenario parameters;
 - top-level replication count;
-- production bootstrap replication count/settings;
-- alpha and FDR alpha;
+- production bootstrap settings;
+- alpha/FDR alpha;
 - timestamp.
 
-### JSON
+JSON stores metadata, scenarios, truth labels, sufficient aggregate counts/sums, metrics, Monte-Carlo intervals and sentinel failures.
 
-Default JSON stores:
+Optional replicate-level NDJSON may be emitted for debugging; it is not required in the committed baseline artifact.
 
-- metadata;
-- scenario definitions;
-- truth labels;
-- sufficient counts/sums for all reported metrics;
-- aggregated metrics;
-- Monte-Carlo intervals;
-- failure/sentinel counts.
-
-Individual replicate-level records may be emitted as optional NDJSON for debugging but are not required in the committed baseline artifact.
-
-### Markdown summary
-
-Contains compact tables by level/scenario family, including at minimum:
+Markdown contains compact A/B1/B2/C tables, including examples such as:
 
 ```text
 true effect = 0      → strong FP rate X% [MC CI]
@@ -459,121 +463,94 @@ nominal 95% CI       → empirical coverage Z% [MC CI]
 identified           → identification rate Q% [MC CI]
 ```
 
-B1 includes change-point and confusion-matrix summaries.
-
-B2 includes final decision and TargetCPC summaries.
-
-C includes empirical FDR and true discovery rate.
-
 ---
 
 ## 10. Run profiles
 
 ### `smoke`
 
-Purpose: CI/software regression only, **not statistical calibration**.
+CI/software regression only, **not statistical calibration**.
 
-Checks:
+Checks seed reproducibility, schema stability, truth labels, sentinel scenarios, gross regressions and dependency direction.
 
-- deterministic seed reproducibility;
-- JSON/report schema stability;
-- truth labels;
-- a small set of sentinel scenarios;
-- gross statistical regressions;
-- calibration code imports production, never the reverse.
-
-The smoke profile must not claim calibrated Type-I error or coverage from a tiny number of runs.
+It must never claim calibrated Type-I error or coverage from a tiny sample.
 
 ### `baseline`
 
-Purpose: first formal calibration report.
+First formal calibration report using production statistical defaults.
 
-Use production statistical defaults, including the production bootstrap settings.
+Minimum initial targets:
 
-Initial target:
+- ~300 top-level replications per A/B scenario family where computationally feasible;
+- ~200 generated campaigns per C family.
 
-- approximately 300 top-level replications per A/B scenario family where computationally feasible;
-- approximately 200 generated campaigns per C scenario family.
-
-These values are minimum baseline targets, not a claim of arbitrary precision. Monte-Carlo intervals communicate the resulting uncertainty.
+Monte-Carlo intervals communicate the precision actually achieved.
 
 ### `deep`
 
-Purpose: higher-precision release comparison for controversial/default-changing PRs.
+Higher-precision comparison for default-changing/statistically controversial PRs:
 
-Target:
+- ~1000 selected A/B replications;
+- ~500 selected C campaigns.
 
-- approximately 1000 top-level replications per selected A/B scenario;
-- approximately 500 generated campaigns per selected C scenario.
-
-A deep run may be scoped to the scenario families affected by a proposed production change.
+Deep runs may be scoped to affected scenario families.
 
 ---
 
 ## 11. Release-gate semantics
 
-Monte-Carlo does not automatically tune production parameters.
+Calibration never auto-tunes production.
 
-Forbidden workflow:
+Forbidden:
 
 ```text
-calibration says another alpha/blockSize is better
+simulator prefers another alpha/blockSize
 → production default changes automatically
 ```
 
-Required workflow:
+Required:
 
 ```text
 production defaults
 → calibration report
-→ observed failure / trade-off
-→ explicit hypothesis
-→ separate production PR
-→ new calibration report
+→ explicit failure/trade-off
+→ separate hypothesis + production PR
+→ new report on same scenarios/seeds
 → before/after comparison
 ```
 
-Calibration scenarios must therefore remain separate from production default selection.
+### Hard invariant release blockers
 
-### Hard invariant gates
-
-The following are deterministic release blockers regardless of aggregate calibration performance:
-
-- rejected/FDR-failed evidence leaks into TargetCPC direction;
-- low-coverage/gap/mixed evidence alone produces a strong supported recommendation;
-- primary KPI units are mixed across a compared transition;
-- missing Spend fallback creates CPC=0;
-- production imports simulator/calibration code;
-- seed reproducibility or report schema contracts fail.
+- rejected/FDR-failed evidence leaks into TargetCPC;
+- low-coverage/gap/mixed evidence alone creates a supported recommendation;
+- primary KPI units are mixed;
+- missing Spend creates CPC=0;
+- production imports calibration code;
+- seed reproducibility/report schema contracts fail.
 
 ### Statistical calibration targets
 
-The first baseline report is diagnostic and establishes the empirical baseline.
+The first baseline is diagnostic and establishes empirical behavior.
 
-Before declaring the statistical layer production-ready, the project must define and satisfy explicit numerical gates for at least:
+Before claiming production-ready statistical calibration, explicit numerical gates must be approved for at least:
 
 - null strong false-positive rate;
 - nominal CI coverage;
 - wrong-sign strong-decision rate;
-- sign recovery / detection under a practically relevant non-null effect;
-- empirical FDR under independent and shared-shock campaign structures.
+- detection/sign recovery at a practically relevant non-null effect;
+- empirical FDR under independent and shared-shock SKU dependence.
 
-Numerical gate values must be approved from the baseline evidence and recorded in a separate release-calibration decision, rather than silently chosen to make the first simulator pass.
+Those numerical gates are approved **after** reviewing the first baseline evidence; they are not silently selected to make the simulator pass.
 
 ---
 
 ## 12. Versioning and comparison
 
-Every committed calibration baseline is tied to:
+Every committed baseline is tied to production commit, calibration schema, scenario schema, seed and profile.
 
-- production commit;
-- calibration schema version;
-- scenario schema version;
-- seed/profile.
+A production change to statistical/decision defaults must provide a before/after calibration comparison on the same scenario schema/seeds whenever possible.
 
-A production-default PR that changes inference or decision thresholds must provide a before/after calibration comparison on the same scenario schema and seeds whenever possible.
-
-Historical reports are immutable evidence; do not overwrite an earlier baseline report with a new result.
+Historical reports are immutable; do not overwrite previous baselines.
 
 ---
 
@@ -618,46 +595,44 @@ tests/
   calibration-report-schema.test.js
 ```
 
-Full baseline/deep output artifacts may be stored under a versioned report directory or attached to a release/PR; the implementation plan will define the exact retention policy without making the browser runtime depend on them.
-
 ---
 
 ## 14. Implementation sequence
 
-No Monte-Carlo implementation starts until this design is approved.
+No implementation starts until this design is approved.
 
-After approval, the implementation plan must execute in this order:
+After approval:
 
-1. deterministic P0 tests and fixes;
+1. deterministic P0 tests + fixes;
 2. seeded RNG, truth schema, scenario/report schema;
-3. Level A estimator calibration;
+3. A estimator calibration;
 4. B1 pipeline scoring;
 5. B2 decision/TargetCPC scoring;
-6. C multiplicity with independent SKU;
-7. C multiplicity with shared demand shocks;
-8. smoke CI integration;
-9. first full baseline calibration report;
-10. separate review of production defaults based on that report.
+6. C independent-SKU multiplicity;
+7. C shared-demand-shock multiplicity;
+8. smoke CI;
+9. first baseline calibration report;
+10. separate production-default review.
 
-The baseline calibration PR does **not** automatically alter alpha, block size, lag thresholds, FDR alpha, CPC-step defaults or other production settings.
+The calibration PR does not automatically alter alpha, block size, lag thresholds, FDR alpha, CPC-step defaults or other production settings.
 
 ---
 
-## 15. Completion criteria for the Monte-Carlo subsystem
+## 15. Completion criteria
 
-This subsystem is complete when:
+The Monte-Carlo subsystem is complete when:
 
 - all five open deterministic P0 are fixed and regression-tested;
-- missing-Spend fallback remains protected by a sentinel test;
-- A/B1/B2/C can be run from Node with fixed seeds;
-- the same seed reproduces identical scenario/truth output;
-- the production pipeline cannot access truth labels;
+- missing-Spend fallback remains a sentinel;
+- A/B1/B2/C run from Node with fixed seeds;
+- identical seeds reproduce identical scenario/truth output;
+- production cannot access truth labels;
 - unconditional and identified-only metrics are both reported;
-- B2 explicitly evaluates TargetCPC leakage/direction, not merely transition estimation;
-- C reports campaign-level empirical FDR as mean FDP;
+- B2 evaluates final TargetCPC direction/leakage;
+- C computes empirical FDR as mean campaign FDP;
 - correlated shared-demand-shock campaigns are included;
 - smoke CI is explicitly non-calibrational;
-- a full baseline JSON + Markdown report is generated with reproducibility metadata;
-- no production defaults are auto-tuned by calibration.
+- a baseline JSON + Markdown report exists with reproducibility metadata;
+- calibration performs no automatic production tuning.
 
-Only after reviewing that baseline report should the team decide whether inference thresholds or decision rules need a separate production change.
+Only after reviewing that baseline report should production inference/decision defaults be reconsidered.
