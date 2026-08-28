@@ -8,14 +8,27 @@ if(!E) throw new Error('economics.js must be loaded before regime_metrics.js');
 function mean(a){const v=(a||[]).filter(Number.isFinite);return v.length?v.reduce((s,x)=>s+x,0)/v.length:null}
 function variance(a){const v=(a||[]).filter(Number.isFinite);if(v.length<2)return 0;const m=mean(v);return v.reduce((s,x)=>s+(x-m)**2,0)/(v.length-1)}
 function weekday(iso){return new Date(iso+'T00:00:00Z').getUTCDay()}
-function aggregateRegimeMetrics(regime,days,economicsSettings={}){
-  const a=(days||regime?.days||[]).filter(r=>r.date>=regime.startDate&&r.date<=regime.endDate).slice().sort((x,y)=>x.date.localeCompare(y.date));
-  const clicks=a.map(r=>Number(r.clicks)||0),carts=a.map(r=>Number(r.carts)||0),spend=a.map(r=>Number(r.spend)).filter(Number.isFinite),revenue=a.map(r=>Number(r.totalRevenue)||0);
-  const orderDaily=a.map(r=>r.safeOrderReliable&&Number.isFinite(Number(r.safeOrderUnits))?Number(r.safeOrderUnits):(r.orderReliable&&Number.isFinite(Number(r.orderUnitsEstimate))?Number(r.orderUnitsEstimate):null));
-  const reliableOrders=orderDaily.filter(Number.isFinite),profitDaily=a.map(r=>E.contributionProfit(r,economicsSettings)),profits=profitDaily.filter(Number.isFinite);
+function orderValue(r){
+  if(r?.safeOrderReliable&&Number.isFinite(Number(r.safeOrderUnits)))return Number(r.safeOrderUnits);
+  if(r?.orderReliable&&Number.isFinite(Number(r.orderUnitsEstimate)))return Number(r.orderUnitsEstimate);
+  return null;
+}
+function resolvePrimaryObjective(days,economicsSettings={}){
+  const a=days||[],n=a.length;
+  const minOrderCoverage=Number.isFinite(Number(economicsSettings.minOrderCoverage))?Number(economicsSettings.minOrderCoverage):.70;
   const minProfitCoverage=Number.isFinite(Number(economicsSettings.minProfitCoverage))?Number(economicsSettings.minProfitCoverage):.70;
-  const useProfit=a.length>0&&profits.length/a.length>=minProfitCoverage;
-  const primaryDaily=useProfit?profits:reliableOrders;
+  const profitCount=a.map(r=>E.contributionProfit(r,economicsSettings)).filter(Number.isFinite).length;
+  if(n>0&&profitCount/n>=minProfitCoverage)return{mode:'profit',name:'contributionProfit/day',minCoverage:minProfitCoverage};
+  return{mode:'orders',name:'orders/day',minCoverage:minOrderCoverage};
+}
+function aggregateRegimeMetrics(regime,days,economicsSettings={},objective=null){
+  const source=days||regime?.days||[],selected=objective||resolvePrimaryObjective(source,economicsSettings);
+  const a=source.filter(r=>r.date>=regime.startDate&&r.date<=regime.endDate).slice().sort((x,y)=>x.date.localeCompare(y.date));
+  const clicks=a.map(r=>Number(r.clicks)||0),carts=a.map(r=>Number(r.carts)||0),spend=a.map(r=>Number(r.spend)).filter(Number.isFinite),revenue=a.map(r=>Number(r.totalRevenue)||0);
+  const orderDaily=a.map(orderValue),reliableOrders=orderDaily.filter(Number.isFinite),profitDaily=a.map(r=>E.contributionProfit(r,economicsSettings)),profits=profitDaily.filter(Number.isFinite);
+  const primaryObserved=selected.mode==='profit'?profits:reliableOrders;
+  const primaryCoverage=a.length?primaryObserved.length/a.length:0;
+  const primaryMean=mean(primaryObserved),primaryUsable=primaryCoverage>=selected.minCoverage&&Number.isFinite(primaryMean);
   const wd=Array(7).fill(0);for(const r of a)wd[weekday(r.date)]++;
   return {
     regimeId:regime.id,startDate:regime.startDate,endDate:regime.endDate,nDays:a.length,
@@ -25,9 +38,9 @@ function aggregateRegimeMetrics(regime,days,economicsSettings={}){
     clicksPerDay:mean(clicks),cartsPerDay:mean(carts),ordersPerDay:mean(reliableOrders),revenuePerDay:mean(revenue),spendPerDay:mean(spend),
     orderCoverage:a.length?reliableOrders.length/a.length:0,profitCoverage:a.length?profits.length/a.length:0,
     contributionProfitPerDay:profits.length?mean(profits):null,
-    primaryMode:useProfit?'profit':'orders',isProfitObjective:useProfit,primaryKpiName:useProfit?'contributionProfit/day':'orders/day',
-    primaryDaily,primaryMean:mean(primaryDaily),primaryVariance:variance(primaryDaily),weekdayComposition:wd
+    primaryMode:selected.mode,isProfitObjective:selected.mode==='profit',primaryKpiName:selected.name,primaryCoverage,primaryUsable,
+    primaryDaily:primaryObserved,primaryMean,primaryVariance:variance(primaryObserved),weekdayComposition:wd
   };
 }
-return {aggregateRegimeMetrics,_internals:{mean,variance}};
+return {resolvePrimaryObjective,aggregateRegimeMetrics,_internals:{mean,variance,orderValue}};
 });
