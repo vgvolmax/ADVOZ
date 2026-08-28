@@ -6,7 +6,7 @@
 'use strict';
 function buildResponseCurve(regimeEvidence,opt={}){
   const mergeRelative=Number.isFinite(Number(opt.mergeRelative))?Math.abs(Number(opt.mergeRelative)):.02;
-  const raw=(regimeEvidence||[]).filter(x=>x&&x.usable!==false&&Number(x.cpc)>0&&Number.isFinite(Number(x.primaryMean))).map(x=>({...x,cpc:Number(x.cpc),primaryMean:Number(x.primaryMean),nDays:Math.max(1,Number(x.nDays)||1)})).sort((a,b)=>a.cpc-b.cpc);
+  const raw=(regimeEvidence||[]).filter(x=>x&&x.usable!==false&&(x.validationStatus===undefined||x.validationStatus==='VALIDATED')&&Number(x.cpc)>0&&Number.isFinite(Number(x.primaryMean))).map(x=>({...x,cpc:Number(x.cpc),primaryMean:Number(x.primaryMean),nDays:Math.max(1,Number(x.nDays)||1)})).sort((a,b)=>a.cpc-b.cpc);
   const groups=[];
   for(const p of raw){
     const g=groups.at(-1);
@@ -14,7 +14,7 @@ function buildResponseCurve(regimeEvidence,opt={}){
       g.items.push(p);const w=g.items.reduce((s,x)=>s+x.nDays,0);g.cpc=g.items.reduce((s,x)=>s+x.cpc*x.nDays,0)/w;g.primaryMean=g.items.reduce((s,x)=>s+x.primaryMean*x.nDays,0)/w;g.nDays=w;
     } else groups.push({cpc:p.cpc,primaryMean:p.primaryMean,nDays:p.nDays,items:[p]});
   }
-  const points=groups.map(g=>({cpc:g.cpc,primaryMean:g.primaryMean,nDays:g.nDays,evidenceType:'OBSERVATIONAL'}));
+  const points=groups.map(g=>({cpc:g.cpc,primaryMean:g.primaryMean,nDays:g.nDays,evidenceType:'OBSERVATIONAL',validationStatus:g.items.every(x=>x.validationStatus==='VALIDATED')?'VALIDATED':undefined,supportingTransitionIds:[...new Set(g.items.flatMap(x=>x.supportingTransitionIds||[]))]}));
   const bestPoint=points.length?points.reduce((a,b)=>b.primaryMean>a.primaryMean?b:a):null;
   function suggestDirection(currentCpc){
     if(points.length<2||!(currentCpc>0)) return null;
