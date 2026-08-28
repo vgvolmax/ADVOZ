@@ -15,10 +15,27 @@ function normalQuantile(p){
   if(p>ph){q=Math.sqrt(-2*Math.log(1-p));return -(((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5])/((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1)}
   q=p-.5;r=q*q;return (((((a[0]*r+a[1])*r+a[2])*r+a[3])*r+a[4])*r+a[5])*q/(((((b[0]*r+b[1])*r+b[2])*r+b[3])*r+b[4])*r+1);
 }
+function varianceFor(metrics){
+  const mean=Number(metrics?.primaryMean),raw=Number(metrics?.primaryVariance);
+  let variance=Number.isFinite(raw)&&raw>=0?raw:0;
+  if(metrics?.primaryMode==='orders'&&mean>0)variance=Math.max(variance,mean);
+  if(!(variance>0)&&Number.isFinite(mean))variance=Math.max(Math.abs(mean)*.05,1e-6)**2;
+  return variance;
+}
+function estimateHistoricalPrecision(a,b,opt={}){
+  const alpha=Number.isFinite(Number(opt.alpha))?Number(opt.alpha):.05,power=Number.isFinite(Number(opt.power))?Number(opt.power):.80;
+  const meanA=Number(a?.primaryMean),meanB=Number(b?.primaryMean),nA=Math.round(Number(a?.nDays)),nB=Math.round(Number(b?.nDays));
+  if(!(Number.isFinite(meanA)&&Number.isFinite(meanB)&&Math.abs(meanA)>1e-9&&nA>1&&nB>1))return{status:'NOT_IDENTIFIED',reason:'INSUFFICIENT_TWO_REGIME_DATA',nA:Number.isFinite(nA)?nA:0,nB:Number.isFinite(nB)?nB:0};
+  const varA=varianceFor(a),varB=varianceFor(b);
+  if(!(varA>=0&&varB>=0))return{status:'NOT_IDENTIFIED',reason:'INVALID_VARIANCE',nA,nB};
+  const varianceTerm=varA/nA+varB/nB,se=Math.sqrt(varianceTerm),zAlpha=normalQuantile(1-alpha/2),zPower=normalQuantile(power);
+  const observedEffectRelative=(meanB-meanA)/Math.abs(meanA),mdeAbsApprox=(zAlpha+zPower)*se,mdeRelativeApprox=mdeAbsApprox/Math.abs(meanA);
+  return{status:'IDENTIFIED',nA,nB,meanA,meanB,varA,varB,varianceTerm,se,observedEffectRelative,mdeRelativeApprox,alpha,power,assumption:'Historical two-regime precision diagnostic using Var_A/n_A + Var_B/n_B; bootstrap CI remains the primary uncertainty safeguard.'};
+}
 function estimateTestFeasibility(baselineMetrics,targetEffect,opt={}){
   const alpha=Number.isFinite(Number(opt.alpha))?Number(opt.alpha):.05,power=Number.isFinite(Number(opt.power))?Number(opt.power):.80,maxTestDays=Math.max(3,Math.round(Number(opt.maxTestDays)||28));
   const mean=Number(baselineMetrics?.primaryMean),rawVar=Number(baselineMetrics?.primaryVariance),effect=Math.abs(Number(targetEffect));
-  if(!(mean>0)||!(effect>0)) return {feasible:false,status:'NO_FEASIBLE_TEST',reason:'Нет положительного baseline KPI или MDE.',requiredDays:Infinity,maxTestDays};
+  if(!(mean>0)||!(effect>0)) return {feasible:false,status:'NO_FEASIBLE_TEST',reason:'Нет положительного baseline KPI или MDE.',requiredDays:Infinity,maxTestDays,powerSemantics:'FUTURE_TEST_FORECAST'};
   let variance=Number.isFinite(rawVar)&&rawVar>=0?rawVar:0;
   if(baselineMetrics?.primaryMode==='orders') variance=Math.max(variance,mean);
   if(!(variance>0)) variance=Math.max(Math.abs(mean)*.05,1e-6)**2;
@@ -30,9 +47,9 @@ function estimateTestFeasibility(baselineMetrics,targetEffect,opt={}){
   return {
     feasible,status:feasible?'FEASIBLE':'NO_FEASIBLE_TEST',requiredDays,maxTestDays,requiredPrimaryKpi,requiredPrimaryKpiName:baselineMetrics?.primaryKpiName||'primary KPI',
     targetEffect:effect,detectableRelativeAtMaxDays:detectableRelative,alpha,power,varianceUsed:variance,
-    overdispersion:baselineMetrics?.primaryMode==='orders'&&mean>0?variance/mean:null,
-    assumption:'Equal-length two-regime approximation using empirical variance with a Poisson variance floor for orders.'
+    overdispersion:baselineMetrics?.primaryMode==='orders'&&mean>0?variance/mean:null,powerSemantics:'FUTURE_TEST_FORECAST',
+    assumption:'Future-test forecast using baseline empirical variance, assuming equal-length baseline and target regimes with a Poisson variance floor for orders.'
   };
 }
-return {normalQuantile,estimateTestFeasibility};
+return {normalQuantile,estimateHistoricalPrecision,estimateTestFeasibility,_internals:{varianceFor}};
 });
