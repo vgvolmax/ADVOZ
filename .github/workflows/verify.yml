@@ -2,7 +2,7 @@ name: Verify v2
 
 on:
   push:
-    branches: ["feat/v2-core"]
+    branches: ["feat/v2-*"]
   pull_request:
     branches: ["main"]
 
