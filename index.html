@@ -59,7 +59,7 @@
         <div id="detailStats" class="stats-grid"></div>
         <div id="testPanel"></div>
         <h3>CPC-режимы</h3><div class="table-wrap inner"><table><thead><tr><th>Режим</th><th>Период</th><th>CPC</th><th>Дни</th><th>Primary KPI</th><th>Budget</th></tr></thead><tbody id="regimeBody"></tbody></table></div>
-        <h3>Квазиэкспериментальные переходы</h3><div class="table-wrap inner"><table><thead><tr><th>Переход</th><th>CPC</th><th>Класс</th><th>Решение</th><th>Эффект</th><th>Temporal</th><th>Основание</th></tr></thead><tbody id="transitionBody"></tbody></table></div>
+        <h3>Квазиэкспериментальные переходы</h3><div class="table-wrap inner"><table><thead><tr><th>Переход</th><th>CPC</th><th>Класс</th><th>Решение</th><th>Эффект</th><th>Temporal</th><th>Uncertainty / FDR</th><th>Основание</th></tr></thead><tbody id="transitionBody"></tbody></table></div>
         <h3>Response evidence</h3><div id="responsePanel" class="response-grid"></div>
       </div>
     </section>
@@ -76,7 +76,9 @@
   <script src="src/regime_metrics.js"></script>
   <script src="src/power.js"></script>
   <script src="src/temporal_adjustment.js"></script>
+  <script src="src/uncertainty.js"></script>
   <script src="src/transition_evaluator.js"></script>
+  <script src="src/multiple_testing.js"></script>
   <script src="src/response_curve.js"></script>
   <script src="src/test_planner.js"></script>
   <script src="src/analyzer.js"></script>
