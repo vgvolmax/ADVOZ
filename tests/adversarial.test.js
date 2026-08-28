@@ -7,6 +7,7 @@ function row(i,cpc,orders,spend=null,reportedCpc=cpc){
 }
 
 {
+  // Demand shock without a CPC regime change must not create a CPC transition.
   const rows=[];for(let i=0;i<30;i++)rows.push(row(i,14,i<15?20:60));
   const [x]=A.analyzeCampaignV2(rows,{budget:{minRollingPoints:5}});
   assert.strictEqual(x.cpcRegimes.length,1);
@@ -15,16 +16,22 @@ function row(i,cpc,orders,spend=null,reportedCpc=cpc){
 }
 
 {
+  // CPC changes while rolling spend also shows a structural level shift. Without a direct budget observation,
+  // v2 must not guess that the budget cap changed: the transition stays observationally uncertain.
   const rows=[];
   for(let i=0;i<14;i++)rows.push(row(i,14,80,1000));
   for(let i=14;i<42;i++)rows.push(row(i,16,100,i<28?1600:3200));
   const [x]=A.analyzeCampaignV2(rows,{budget:{minRollingPoints:5,plateauCv:.05,capChangeRelative:.2}});
   assert.strictEqual(x.cpcRegimes.length,2);
-  assert.strictEqual(x.transitions[0].code,'MIXED_CPC_BUDGET_TRANSITION');
+  assert.strictEqual(x.budgetStates.at(-1).code,'BUDGET_STATE_UNCERTAIN');
+  assert.strictEqual(x.budgetStates.at(-1).structuralShiftObserved,true);
+  assert.strictEqual(x.transitions[0].code,'TRANSITION_UNCERTAIN');
   assert.strictEqual(x.transitions[0].decision,'INCONCLUSIVE');
+  assert.strictEqual(x.transitions[0].evidenceType,'OBSERVATIONAL');
 }
 
 {
+  // Reported CPC can disagree with Spend/Clicks; it is a data-quality warning, not a budget signal.
   const rows=[];for(let i=0;i<28;i++)rows.push(row(i,10,50,1000,i<14?10:20));
   const [x]=A.analyzeCampaignV2(rows,{budget:{minRollingPoints:5}});
   assert.strictEqual(x.cpcRegimes.length,1);
