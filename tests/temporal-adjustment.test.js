@@ -19,7 +19,7 @@ function close(a,b,t=.05){assert.ok(Math.abs(a-b)<=t,`${a} not within ${t} of ${
 {
   const weekdayValue=d=>[8,10,10,10,10,10,20][new Date(d+'T00:00:00Z').getUTCDay()];
   const aDates=Array.from({length:14},(_,i)=>iso('2026-06-01',i));
-  const bDates=Array.from({length:10},(_,i)=>iso('2026-06-13',i));
+  const bDates=Array.from({length:8},(_,i)=>iso('2026-06-13',i));
   const aVals=aDates.map(weekdayValue),bVals=bDates.map(weekdayValue);
   const a=regime('R1','2026-06-01',aVals),b=regime('R2','2026-06-13',bVals);
   const raw=bVals.reduce((s,x)=>s+x,0)/bVals.length/(aVals.reduce((s,x)=>s+x,0)/aVals.length)-1;
