@@ -9,7 +9,12 @@
 for(const [k,v] of Object.entries(D)) if(!v) throw new Error(`Missing v2 dependency ${k}`);
 function groupRows(rows,todayIso){
   const by=new Map();
-  for(const r of rows||[]){if(!r?.sku||!r?.date||r.date===todayIso)continue;if(!by.has(r.sku))by.set(r.sku,new Map());const m=by.get(r.sku),old=m.get(key=`${r.date}`);if(!old||(Number(r.sourceOrder)||0)>=(Number(old.sourceOrder)||0))m.set(key,r)}
+  for(const r of rows||[]){
+    if(!r?.sku||!r?.date||r.date===todayIso)continue;
+    if(!by.has(r.sku))by.set(r.sku,new Map());
+    const m=by.get(r.sku),key=String(r.date),old=m.get(key);
+    if(!old||(Number(r.sourceOrder)||0)>=(Number(old.sourceOrder)||0))m.set(key,r);
+  }
   return [...by].map(([sku,m])=>({sku,days:[...m.values()].sort((a,b)=>a.date.localeCompare(b.date))}));
 }
 function isValidatedTransition(t,metricsByRegime){
