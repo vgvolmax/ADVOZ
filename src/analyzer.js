@@ -19,7 +19,7 @@ function analyzeSku(sku,days,settings={}){
   const price=D.P.detectPriceRegimes(safe,settings.price||{});
   const metrics=cpc.regimes.map(r=>D.M.aggregateRegimeMetrics(r,safe,settings.economics||{}));
   let transitions=D.T.buildTransitions(cpc.regimes,budget,price,settings.transitions||{});
-  transitions=D.V.evaluateTransitions(transitions,metrics,{...(settings.power||{}),...(settings.evaluator||{})});
+  transitions=D.V.evaluateTransitions(transitions,metrics,{...(settings.power||{}),...(settings.evaluator||{}),regimes:cpc.regimes,economicsSettings:settings.economics||{},temporal:settings.temporal||{}});
   const cleanIds=new Set();for(const t of transitions)if(t.code==='CLEAN_CPC_TRANSITION'){cleanIds.add(t.fromRegimeId);cleanIds.add(t.toRegimeId)}
   const evidence=metrics.map(m=>({cpc:m.cpc,primaryMean:m.primaryMean,nDays:m.nDays,usable:cleanIds.has(m.regimeId),regimeId:m.regimeId,evidenceType:'OBSERVATIONAL'}));
   const curve=D.R.buildResponseCurve(evidence,settings.response||{}),baselineMetrics=metrics.at(-1)||null;
