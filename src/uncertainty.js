@@ -14,13 +14,11 @@ function buildFit(observations,includeTreatment=true,opt={}){
   const obs=(observations||[]).filter(o=>Number.isFinite(o.y)&&Number.isFinite(o.time)&&Number.isInteger(o.weekday)&&(o.treatment===0||o.treatment===1));
   if(!obs.some(o=>o.treatment===0)||!obs.some(o=>o.treatment===1)) return null;
   const weekdays=[...new Set(obs.map(o=>o.weekday))].sort((a,b)=>a-b),dummyDays=weekdays.slice(1);
-  const p=2+dummyDays.length+(includeTreatment?1:0); // intercept, optional treatment, trend, weekday FE
+  const p=2+dummyDays.length+(includeTreatment?1:0);
   const minResidualDf=Math.max(2,Math.round(Number(opt.minResidualDf)||3));
   if(obs.length<p+minResidualDf) return null;
   const tMean=mean(obs.map(o=>o.time)),tScale=Math.max(1,...obs.map(o=>Math.abs(o.time-tMean)));
-  const X=obs.map(o=>{
-    const x=[1];if(includeTreatment)x.push(o.treatment);x.push((o.time-tMean)/tScale);for(const d of dummyDays)x.push(o.weekday===d?1:0);return x;
-  });
+  const X=obs.map(o=>{const x=[1];if(includeTreatment)x.push(o.treatment);x.push((o.time-tMean)/tScale);for(const d of dummyDays)x.push(o.weekday===d?1:0);return x;});
   const y=obs.map(o=>o.y),XtX=Array.from({length:p},()=>Array(p).fill(0)),Xty=Array(p).fill(0);
   for(let i=0;i<X.length;i++)for(let a=0;a<p;a++){Xty[a]+=X[i][a]*y[i];for(let b=0;b<p;b++)XtX[a][b]+=X[i][a]*X[i][b]}
   const beta=T._internals.solveLinear(XtX,Xty,Number(opt.rankTolerance)||1e-10);if(!beta)return null;
@@ -34,7 +32,8 @@ function fitEffectOnFixedDesign(fit,yStar,opt={}){
   const X=fit.X,p=fit.p,XtX=Array.from({length:p},()=>Array(p).fill(0)),Xty=Array(p).fill(0);
   for(let i=0;i<X.length;i++)for(let a=0;a<p;a++){Xty[a]+=X[i][a]*yStar[i];for(let b=0;b<p;b++)XtX[a][b]+=X[i][a]*X[i][b]}
   const beta=T._internals.solveLinear(XtX,Xty,Number(opt.rankTolerance)||1e-10);if(!beta)return null;
-  const baseline=mean(fit.obs.filter(o=>o.treatment===0).map((o,i)=>({o,i})).map(z=>yStar[z.i]));
+  const baselineIdx=[];for(let i=0;i<fit.obs.length;i++)if(fit.obs[i].treatment===0)baselineIdx.push(i);
+  const baseline=mean(baselineIdx.map(i=>yStar[i]));
   if(!Number.isFinite(baseline)||Math.abs(baseline)<1e-9)return null;
   return beta[1]/baseline;
 }
@@ -46,42 +45,43 @@ function blockResampleWithinTreatment(obs,residuals,blockSize,rng){
     if(!idx.length)continue;
     const pool=idx.map(i=>residuals[i]),generated=[];
     while(generated.length<idx.length){const start=Math.floor(rng()*pool.length);for(let k=0;k<blockSize&&generated.length<idx.length;k++)generated.push(pool[(start+k)%pool.length])}
-    const m=mean(generated)||0; // preserve shape while removing accidental block mean drift
-    for(let j=0;j<idx.length;j++)out[idx[j]]=generated[j]-m;
+    for(let j=0;j<idx.length;j++)out[idx[j]]=generated[j];
   }
   return out;
 }
 
-function representativeLag(temporal){
-  const identified=(temporal?.lagResults||[]).filter(r=>r.status==='IDENTIFIED'&&Number.isFinite(r.adjustedEffectRelative));
-  if(!identified.length)return null;
-  const target=Number.isFinite(temporal.representativeEffectRelative)?temporal.representativeEffectRelative:identified[0].adjustedEffectRelative;
-  return identified.slice().sort((a,b)=>Math.abs(a.adjustedEffectRelative-target)-Math.abs(b.adjustedEffectRelative-target)||a.lag-b.lag)[0].lag;
+function identifiedLags(temporal){return (temporal?.lagResults||[]).filter(r=>r.status==='IDENTIFIED'&&Number.isFinite(r.adjustedEffectRelative)).map(r=>r.lag).sort((a,b)=>a-b)}
+
+function bootstrapOneLag(lag,mode,fromRegime,toRegime,opt,seed){
+  const obs=T._internals.observationsForLag(fromRegime,toRegime,mode,lag,opt.economicsSettings||{});
+  const full=buildFit(obs,true,opt),reduced=buildFit(obs,false,opt);if(!(full&&reduced))return null;
+  const minPerGroup=Math.min(obs.filter(o=>o.treatment===0).length,obs.filter(o=>o.treatment===1).length);if(minPerGroup<6)return null;
+  const reps=Math.max(100,Math.round(Number(opt.reps)||400)),alpha=Math.max(.001,Math.min(.25,Number(opt.alpha)||.05));
+  const blockSize=Math.max(2,Math.min(minPerGroup,Math.round(Number(opt.blockSize)||Math.pow(obs.length,1/3)||2)));
+  const rng=rngFromSeed(seed),ciDist=[],nullDist=[];
+  for(let b=0;b<reps;b++){
+    const eFull=blockResampleWithinTreatment(obs,full.residuals,blockSize,rng);
+    const yFull=full.fitted.map((v,i)=>v+eFull[i]),effFull=fitEffectOnFixedDesign(full,yFull,opt);if(Number.isFinite(effFull))ciDist.push(effFull);
+    const eNull=blockResampleWithinTreatment(obs,reduced.residuals,blockSize,rng);
+    const yNull=reduced.fitted.map((v,i)=>v+eNull[i]),effNull=fitEffectOnFixedDesign(full,yNull,opt);if(Number.isFinite(effNull))nullDist.push(effNull);
+  }
+  const minValid=Math.max(80,Math.floor(reps*.8));if(ciDist.length<minValid||nullDist.length<minValid)return null;
+  const observed=full.effectRelative,low=quantile(ciDist,alpha/2),high=quantile(ciDist,1-alpha/2),extreme=nullDist.filter(x=>Math.abs(x)>=Math.abs(observed)).length,pValue=(extreme+1)/(nullDist.length+1);
+  return{lag,n:obs.length,reps,validReps:ciDist.length,blockSize,estimateRelative:observed,ci:{level:1-alpha,low,high},pValue};
 }
 
 function estimateTemporalUncertainty(transition,temporal,fromRegime,toRegime,fromMetrics,toMetrics,opt={}){
-  const notIdentified=(reason)=>({status:'UNCERTAINTY_NOT_IDENTIFIED',reason,method:'MOVING_BLOCK_RESIDUAL_BOOTSTRAP',basis:'OBSERVATIONAL',pValue:null,ci:null});
+  const notIdentified=(reason)=>({status:'UNCERTAINTY_NOT_IDENTIFIED',reason,method:'MOVING_BLOCK_RESIDUAL_BOOTSTRAP',basis:'OBSERVATIONAL',pValue:null,ci:null,lagResults:[]});
   if(transition?.code&&transition.code!=='CLEAN_CPC_TRANSITION')return notIdentified('NOT_CLEAN_TRANSITION');
   if(temporal?.status!=='LAG_STABLE')return notIdentified('TEMPORAL_NOT_STABLE');
-  const lag=representativeLag(temporal);if(lag==null)return notIdentified('NO_IDENTIFIED_LAG');
-  const mode=fromMetrics?.primaryMode||toMetrics?.primaryMode||temporal?.primaryMode||'orders';
-  const obs=T._internals.observationsForLag(fromRegime,toRegime,mode,lag,opt.economicsSettings||{});
-  const full=buildFit(obs,true,opt),reduced=buildFit(obs,false,opt);if(!(full&&reduced))return notIdentified('DESIGN_NOT_IDENTIFIED');
-  const minPerGroup=Math.min(obs.filter(o=>o.treatment===0).length,obs.filter(o=>o.treatment===1).length);
-  if(minPerGroup<6)return notIdentified('TOO_FEW_DAYS_PER_REGIME');
-  const reps=Math.max(100,Math.round(Number(opt.reps)||400)),alpha=Math.max(.001,Math.min(.25,Number(opt.alpha)||.05));
-  const blockSize=Math.max(2,Math.min(minPerGroup,Math.round(Number(opt.blockSize)||Math.pow(obs.length,1/3)||2)));
-  const rng=rngFromSeed(opt.seed??20260828),ciDist=[],nullDist=[];
-  for(let b=0;b<reps;b++){
-    const e=blockResampleWithinTreatment(obs,full.residuals,blockSize,rng);
-    const yFull=full.fitted.map((v,i)=>v+e[i]),effFull=fitEffectOnFixedDesign(full,yFull,opt);if(Number.isFinite(effFull))ciDist.push(effFull);
-    const yNull=reduced.fitted.map((v,i)=>v+e[i]),effNull=fitEffectOnFixedDesign(full,yNull,opt);if(Number.isFinite(effNull))nullDist.push(effNull);
-  }
-  const minValid=Math.max(80,Math.floor(reps*.8));if(ciDist.length<minValid||nullDist.length<minValid)return notIdentified('TOO_FEW_VALID_BOOTSTRAPS');
-  const observed=full.effectRelative,low=quantile(ciDist,alpha/2),high=quantile(ciDist,1-alpha/2);
-  const extreme=nullDist.filter(x=>Math.abs(x)>=Math.abs(observed)).length,pValue=(extreme+1)/(nullDist.length+1);
-  return{status:'UNCERTAINTY_IDENTIFIED',method:'MOVING_BLOCK_RESIDUAL_BOOTSTRAP',basis:'OBSERVATIONAL',lag,n:obs.length,reps,validReps:ciDist.length,blockSize,estimateRelative:observed,ci:{level:1-alpha,low,high},pValue};
+  const lags=identifiedLags(temporal);if(!lags.length)return notIdentified('NO_IDENTIFIED_LAG');
+  const mode=fromMetrics?.primaryMode||toMetrics?.primaryMode||temporal?.primaryMode||'orders',baseSeed=Number(opt.seed??20260828);
+  const lagResults=[];for(const lag of lags){const r=bootstrapOneLag(lag,mode,fromRegime,toRegime,opt,baseSeed+lag*100003);if(!r)return notIdentified(`LAG_${lag}_UNCERTAINTY_NOT_IDENTIFIED`);lagResults.push(r)}
+  const level=lagResults[0].ci.level,low=Math.min(...lagResults.map(r=>r.ci.low)),high=Math.max(...lagResults.map(r=>r.ci.high));
+  const pValue=Math.max(...lagResults.map(r=>r.pValue));
+  const estimateRelative=Number.isFinite(temporal.representativeEffectRelative)?temporal.representativeEffectRelative:mean(lagResults.map(r=>r.estimateRelative));
+  return{status:'UNCERTAINTY_IDENTIFIED',method:'MOVING_BLOCK_RESIDUAL_BOOTSTRAP',aggregation:'CONSERVATIVE_LAG_ENVELOPE',basis:'OBSERVATIONAL',lags,n:Math.min(...lagResults.map(r=>r.n)),reps:lagResults[0].reps,validReps:Math.min(...lagResults.map(r=>r.validReps)),blockSize:Math.max(...lagResults.map(r=>r.blockSize)),estimateRelative,ci:{level,low,high},pValue,lagResults};
 }
 
-return{estimateTemporalUncertainty,_internals:{mean,quantile,rngFromSeed,buildFit,fitEffectOnFixedDesign,blockResampleWithinTreatment,representativeLag}};
+return{estimateTemporalUncertainty,_internals:{mean,quantile,rngFromSeed,buildFit,fitEffectOnFixedDesign,blockResampleWithinTreatment,identifiedLags,bootstrapOneLag}};
 });
