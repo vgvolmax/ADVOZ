@@ -10,5 +10,18 @@ function benjaminiHochberg(items,opt={}){
   for(let k=m-1;k>=0;k--){const rank=k+1,raw=Math.min(1,valid[k].p*m/rank),q=Math.min(next,raw);next=q;out[valid[k].i].qValue=q;out[valid[k].i].fdrStatus=q<=alpha?'FDR_PASS':'FDR_NOT_PASS';}
   return out;
 }
-return{benjaminiHochberg,_internals:{validP}};
+function applyFdrToCampaign(analyses,opt={}){
+  const alpha=Math.max(.001,Math.min(.5,Number(opt.alpha)||.05)),flat=[];
+  for(let ai=0;ai<(analyses||[]).length;ai++)for(let ti=0;ti<(analyses[ai].transitions||[]).length;ti++)flat.push({ai,ti,pValue:analyses[ai].transitions[ti]?.uncertainty?.pValue});
+  const adjusted=benjaminiHochberg(flat,{alpha}),familySize=adjusted.filter(x=>validP(x.pValue)!==null).length;
+  const by=new Map(adjusted.map(x=>[`${x.ai}:${x.ti}`,x]));
+  return (analyses||[]).map((a,ai)=>({...a,transitions:(a.transitions||[]).map((t,ti)=>{
+    const x=by.get(`${ai}:${ti}`)||{qValue:null,fdrStatus:'FDR_NOT_APPLICABLE'},out={...t,qValue:x.qValue,fdrStatus:x.fdrStatus,fdrFamilySize:familySize};
+    if((t.decision==='DEPLOY'||t.decision==='ROLLBACK')&&x.fdrStatus!=='FDR_PASS'){
+      out.decisionBeforeFdr=t.decision;out.decision='INCONCLUSIVE';out.decisionReason='Сильное observational-решение не проходит campaign-wide BH/FDR safeguard.';
+    }
+    return out;
+  })}));
+}
+return{benjaminiHochberg,applyFdrToCampaign,_internals:{validP}};
 });
