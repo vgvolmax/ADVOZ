@@ -18,8 +18,10 @@ XLSX
 → CLEAN / MIXED / UNCERTAIN
 → regime metrics
 → temporal calibration: lag 0/+1/+2 + weekday + linear trend
+→ moving-block residual bootstrap: CI + p-value
 → MDE / Power
 → OBSERVATIONAL evaluator
+→ campaign-wide Benjamini–Hochberg / q-value
 → response evidence
 → TargetCPC + карточка следующего теста
   или NO_FEASIBLE_TEST
@@ -34,14 +36,15 @@ XLSX
 - точный установленный недельный бюджет и Coverage не восстанавливаются;
 - rolling-7d Spend используется только для вывода эффективного бюджетного состояния;
 - структурный сдвиг Spend сам по себе не доказывает смену бюджета: при неоднозначности используется `BUDGET_STATE_UNCERTAIN`;
-- temporal adjustment не превращает исторический переход в причинный эксперимент: основание остаётся `OBSERVATIONAL`;
+- temporal adjustment, bootstrap CI, `p` и `q` **не превращают** исторический переход в причинный эксперимент: основание остаётся `OBSERVATIONAL`;
+- `q` используется как multiplicity safeguard, а не как вероятность того, что вывод верен;
 - следующий тест не рекомендуется, если он не отделим от CPC-шума или нужная мощность недостижима за разумный срок (`NO_FEASIBLE_TEST`).
 
 Полная утверждённая математическая спецификация: [`Ozon_CPC_Optimizer_v2_FINAL_SPEC.md`](Ozon_CPC_Optimizer_v2_FINAL_SPEC.md).
 
 ## Статус реализации относительно финальной спецификации
 
-Текущая версия реализует **ядро v2, первый statistical calibration layer и рабочий пакетный UI**, но не выдаёт нереализованные части спецификации за готовые.
+Текущая версия реализует **ядро v2, temporal calibration, bootstrap uncertainty, BH/FDR safeguard и рабочий пакетный UI**, но не выдаёт нереализованные части спецификации за готовые.
 
 ### Реализовано
 
@@ -56,9 +59,17 @@ XLSX
 - regime-level business metrics;
 - **temporal calibration для clean transitions:** lag `0/+1/+2`, weekday fixed effects и линейный календарный trend;
 - `LAG_STABLE / LAG_SENSITIVE / LAG_NOT_IDENTIFIED`;
-- `LAG_SENSITIVE` и `LAG_NOT_IDENTIFIED` блокируют сильные `DEPLOY/ROLLBACK` и дают `INCONCLUSIVE`;
+- `LAG_SENSITIVE` и `LAG_NOT_IDENTIFIED` блокируют сильные `DEPLOY/ROLLBACK`;
 - при `LAG_STABLE` evaluator предпочитает `TEMPORAL_ADJUSTED` effect сырому regime mean difference;
-- UI показывает temporal status, источник эффекта и отдельные adjusted effects по lag 0/+1/+2;
+- **moving-block residual bootstrap** с блоками внутри baseline/test regimes;
+- bootstrap CI по full-model residuals и approximate two-sided null-bootstrap `p-value` по restricted model без treatment-step;
+- uncertainty считается консервативно по всей идентифицированной lag-family: итоговый CI — envelope по lag 0/+1/+2, итоговый `p` — наиболее консервативный из lag-specific p-values;
+- `UNCERTAINTY_IDENTIFIED / UNCERTAINTY_NOT_IDENTIFIED`;
+- confidence interval, пересекающий ноль, блокирует сильное `DEPLOY/ROLLBACK`;
+- campaign-wide **Benjamini–Hochberg** по доступным transition p-values;
+- `qValue`, `FDR_PASS / FDR_NOT_PASS / FDR_NOT_APPLICABLE`;
+- сильное `DEPLOY/ROLLBACK`, не прошедшее BH/FDR, понижается до `INCONCLUSIVE` с сохранением `decisionBeforeFdr`;
+- UI показывает temporal status, lag-specific effects, bootstrap CI, `p`, `q`, FDR status и прежнее решение при FDR downgrade;
 - MDE/power feasibility с empirical variance и Poisson variance floor для заказов;
 - `DEPLOY / ROLLBACK / EXTEND / INCONCLUSIVE` как операционные observational-решения;
 - `NO_FEASIBLE_TEST` при недостижимой мощности или неотделимом от CPC-шума шаге;
@@ -90,18 +101,35 @@ primary KPI
 
 Даже `LAG_STABLE` остаётся **наблюдательным**, а не причинно доказанным результатом.
 
+## Bootstrap uncertainty и FDR — что именно считается
+
+Для `LAG_STABLE` переходов строится moving-block residual bootstrap. Residual blocks ресемплируются отдельно внутри baseline и test regimes, чтобы не перемешивать временную структуру через CPC change-point.
+
+Для каждого идентифицированного lag:
+
+1. full temporal model используется для bootstrap distribution эффекта и percentile CI;
+2. restricted temporal model без treatment-step задаёт null process для approximate two-sided bootstrap p-value;
+3. residual blocks не центрируются искусственно по режимам — bootstrap сохраняет естественную вариативность групповых средних.
+
+Поскольку lag 0/+1/+2 проверяются как семейство, uncertainty не рассчитывается только для одного удобного lag. Итоговый CI расширяется до **консервативной оболочки** всех идентифицированных lag-specific CI, а итоговый p-value берётся как максимальный lag-specific p-value.
+
+После анализа всех SKU в загруженной рекламной кампании доступные transition p-values образуют одно семейство для Benjamini–Hochberg. В UI показываются `p`, `q` и FDR status.
+
+Важно:
+
+> `p` и `q` повышают или понижают устойчивость observational evidence, но не доказывают причинность CPC-эффекта.
+
 ### Осознанно отложено и не должно трактоваться как реализованное
 
 1. **Более богатая сезонная/календарная модель (§11, §16).** Сейчас реализованы weekday fixed effects и линейный trend. Праздники, нелинейная сезонность, внешние demand indices и более сложная interrupted-time-series структура пока не моделируются.
-2. **BH/FDR (§20).** В текущем ядре нет полноценного набора inferential transition p-values, поэтому FDR пока не применяется. Его нужно добавлять вместе с корректным uncertainty layer, а не имитировать без p-values.
-3. **Block bootstrap / regime resampling / Monte-Carlo calibration (§21).** Текущий CI проверяет детерминированные и adversarial synthetic cases, но статистическая калибровка false-positive/sign-recovery и coverage ещё не выполнена.
-4. **Confidence score (§31).** Числовой `Confidence 0–100` намеренно не показывается, пока score не откалиброван; это лучше, чем создать ложную вероятность истины.
-5. **Полная contribution-profit экономика (§15).** Сейчас поддерживаются упрощённые входы `unitContributionBeforeAds` или `contributionMarginRate`. Полный разбор COGS, marketplace fees, logistics, taxes, buyout/returns/compensations требует дополнительных входных данных и остаётся следующим слоем.
-6. **Гладкая нелинейная response curve и математический `CPC*` (§27–29).** Сейчас используются наблюдаемые локальные response points и следующий ограниченный TargetCPC. Далёкая экстраполяция запрещена; полноценный smooth optimum не заявляется.
-7. **Heterogeneity по budget regimes (§28).** Отдельные CPC-кривые по бюджетным состояниям не строятся до появления достаточного evidence, как и требует спецификация.
-8. **Полное разделение UI-меток `OBSERVED / ESTIMATED / INFERRED / RECOMMENDED` (§30).** Ключевые `OBSERVATIONAL`, budget-state, temporal source и recommendation labels уже разделены, но полный semantic tagging каждого показателя ещё требует отдельного UI-прохода.
+2. **Monte-Carlo calibration (§21).** Block bootstrap реализован, но отдельная широкая симуляционная калибровка false-positive rate, sign recovery и empirical CI coverage на сетке DGP ещё не выполнена. До неё bootstrap p/q следует воспринимать как дополнительный observational safeguard, а не как идеально откалиброванный causal test.
+3. **Confidence score (§31).** Числовой `Confidence 0–100` намеренно не показывается, пока score не откалиброван; это лучше, чем создать ложную вероятность истины.
+4. **Полная contribution-profit экономика (§15).** Сейчас поддерживаются упрощённые входы `unitContributionBeforeAds` или `contributionMarginRate`. Полный разбор COGS, marketplace fees, logistics, taxes, buyout/returns/compensations требует дополнительных входных данных и остаётся следующим слоем.
+5. **Гладкая нелинейная response curve и математический `CPC*` (§27–29).** Сейчас используются наблюдаемые локальные response points и следующий ограниченный TargetCPC. Далёкая экстраполяция запрещена; полноценный smooth optimum не заявляется.
+6. **Heterogeneity по budget regimes (§28).** Отдельные CPC-кривые по бюджетным состояниям не строятся до появления достаточного evidence, как и требует спецификация.
+7. **Полное разделение UI-меток `OBSERVED / ESTIMATED / INFERRED / RECOMMENDED` (§30).** Ключевые `OBSERVATIONAL`, budget-state, temporal source, uncertainty/FDR и recommendation labels уже разделены, но полный semantic tagging каждого показателя ещё требует отдельного UI-прохода.
 
-Эти пункты являются **следующими калибровочными/статистическими фазами**, а не скрытыми возможностями текущей версии.
+Эти пункты являются **следующими калибровочными/экономическими фазами**, а не скрытыми возможностями текущей версии.
 
 ## Запуск
 
@@ -146,3 +174,4 @@ CI дополнительно выполняет `node --check` для JavaScrip
 - `docs/superpowers/specs/2026-08-27-advoz-v2-architecture-design.md`
 - `docs/superpowers/plans/2026-08-27-advoz-v2-implementation.md`
 - `docs/superpowers/plans/2026-08-28-v2-statistical-calibration.md`
+- `docs/superpowers/plans/2026-08-28-v2-uncertainty-calibration.md`
