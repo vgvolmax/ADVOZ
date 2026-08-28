@@ -1,0 +1,13 @@
+const assert=require('assert');
+const fs=require('fs');
+const html=fs.readFileSync('index.html','utf8');
+const app=fs.readFileSync('app.js','utf8');
+const u=html.indexOf('src/uncertainty.js'),e=html.indexOf('src/transition_evaluator.js');
+const m=html.indexOf('src/multiple_testing.js'),a=html.indexOf('src/analyzer.js');
+assert.ok(u>=0&&e>u,'uncertainty.js must load before transition_evaluator.js');
+assert.ok(m>=0&&a>m,'multiple_testing.js must load before analyzer.js');
+assert.ok(html.includes('Uncertainty / FDR'));
+assert.ok(app.includes('UNCERTAINTY_IDENTIFIED'));
+assert.ok(app.includes('fdrStatus'));
+assert.ok(app.includes('q='));
+console.log('PASS uncertainty/FDR UI contracts');
