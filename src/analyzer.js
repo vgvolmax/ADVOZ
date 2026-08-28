@@ -14,10 +14,11 @@ function groupRows(rows,todayIso){
 }
 function analyzeSku(sku,days,settings={}){
   const safe=D.O.buildSafeOrderSeries(days,settings.orders||{});
+  const primaryObjective=D.M.resolvePrimaryObjective(safe,settings.economics||{});
   const cpc=D.C.detectCpcRegimes(safe,settings.cpc||{});
   const budget=D.B.inferEffectiveBudgetStates(safe,cpc.regimes,settings.budget||{});
   const price=D.P.detectPriceRegimes(safe,settings.price||{});
-  const metrics=cpc.regimes.map(r=>D.M.aggregateRegimeMetrics(r,safe,settings.economics||{}));
+  const metrics=cpc.regimes.map(r=>D.M.aggregateRegimeMetrics(r,safe,settings.economics||{},primaryObjective));
   let transitions=D.T.buildTransitions(cpc.regimes,budget,price,settings.transitions||{});
   transitions=D.V.evaluateTransitions(transitions,metrics,{...(settings.power||{}),...(settings.evaluator||{}),regimes:cpc.regimes,economicsSettings:settings.economics||{},temporal:settings.temporal||{},uncertainty:settings.uncertainty||{}});
   const cleanIds=new Set();for(const t of transitions)if(t.code==='CLEAN_CPC_TRANSITION'){cleanIds.add(t.fromRegimeId);cleanIds.add(t.toRegimeId)}
@@ -25,7 +26,7 @@ function analyzeSku(sku,days,settings={}){
   const curve=D.R.buildResponseCurve(evidence,settings.response||{}),baselineMetrics=metrics.at(-1)||null;
   const recommendation=baselineMetrics?D.TP.planNextTest({baselineMetrics,cpcNoise:cpc.noise,responseCurve:curve},{...(settings.power||{}),...(settings.planner||{})}):{status:'NO_FEASIBLE_TEST',reasonCode:'NO_BASELINE_CPC',reason:'Нет устойчивого baseline regime.',evidenceType:'OBSERVATIONAL'};
   const accounting=safe.map(r=>D.N.validateAccounting(r,settings.accountingTolerance??.05));
-  return {sku,name:safe.find(r=>r.name)?.name||'',days:safe,cpcRegimes:cpc.regimes,cpcNoise:cpc.noise,cpcChangePoints:cpc.changePoints,budgetStates:budget.states,budgetChangePoints:budget.changePoints,rolling7d:budget.rolling,priceRegimes:price.regimes,priceStatus:price.status,priceCoverage:price.coverage,regimeMetrics:metrics,transitions,responseCurve:{status:curve.status,points:curve.points,minCpc:curve.minCpc,maxCpc:curve.maxCpc,bestPoint:curve.bestPoint},recommendation,currentRegime:cpc.regimes.at(-1)||null,evidenceType:'OBSERVATIONAL',dataQuality:{accountingMismatchCount:accounting.filter(x=>x.code==='ACCOUNTING_MISMATCH').length,accountingCheckableCount:accounting.filter(x=>x.code!=='ACCOUNTING_NOT_CHECKABLE').length,orderReliableCoverage:safe.length?safe.filter(x=>x.safeOrderReliable).length/safe.length:0}};
+  return {sku,name:safe.find(r=>r.name)?.name||'',days:safe,primaryObjective,cpcRegimes:cpc.regimes,cpcNoise:cpc.noise,cpcChangePoints:cpc.changePoints,budgetStates:budget.states,budgetChangePoints:budget.changePoints,rolling7d:budget.rolling,priceRegimes:price.regimes,priceStatus:price.status,priceCoverage:price.coverage,regimeMetrics:metrics,transitions,responseCurve:{status:curve.status,points:curve.points,minCpc:curve.minCpc,maxCpc:curve.maxCpc,bestPoint:curve.bestPoint},recommendation,currentRegime:cpc.regimes.at(-1)||null,evidenceType:'OBSERVATIONAL',dataQuality:{accountingMismatchCount:accounting.filter(x=>x.code==='ACCOUNTING_MISMATCH').length,accountingCheckableCount:accounting.filter(x=>x.code!=='ACCOUNTING_NOT_CHECKABLE').length,orderReliableCoverage:safe.length?safe.filter(x=>x.safeOrderReliable).length/safe.length:0}};
 }
 function analyzeCampaignV2(rows,settings={}){const analyses=groupRows(rows,settings.todayIso).map(g=>analyzeSku(g.sku,g.days,settings));return D.MT.applyFdrToCampaign(analyses,{alpha:Number(settings.fdrAlpha)||.05});}
 return {analyzeCampaignV2,_internals:{groupRows,analyzeSku}};
